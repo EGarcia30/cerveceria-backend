@@ -3,11 +3,11 @@ const express = require('express');
 const router = express.Router();
 const db = require('../config/database');
 
-// ✅ GET /api/mesas?page=1&limit=20&estado=disponible
+// ✅ GET /api/mesas?page=1&limit=10&estado=disponible
 router.get('/', async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 20;
+        const limit = parseInt(req.query.limit) || 10;
         const offset = (page - 1) * limit;
         const estado = req.query.estado || null;
 
@@ -49,7 +49,7 @@ router.get('/', async (req, res) => {
         }
 
         query += `
-            ORDER BY numero_mesa ASC
+            ORDER BY id ASC
             LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
         `;
         queryParams.push(limit, offset);

@@ -26,7 +26,7 @@ router.get('/', async (req, res) => {
                 FROM public.cuentas c
                 LEFT JOIN public.mesas m ON c.mesa_id = m.id
                 WHERE c.estado = $1  -- ✅ SOLO PENDIENTES
-                ORDER BY c.fecha_creado DESC
+                ORDER BY c.id DESC
                 LIMIT $2 OFFSET $3
             `, ['pendiente', limit, offset])
         ]);
@@ -127,23 +127,54 @@ router.get('/historial', async (req, res) => {
     }
 });
 
-// ✅ GET /api/cuentas/:id
+// ✅ GET /api/cuentas/:id - CON PROMOCIONES
 router.get('/:id', async (req, res) => {
     try {
         const { id } = req.params;
+        
         const [cuentaResult, detallesResult] = await Promise.all([
+            // Cuenta principal
             db.query(`
-                SELECT c.*, m.numero_mesa  -- ✅ JOIN mesa
+                SELECT c.*, m.numero_mesa
                 FROM public.cuentas c
                 LEFT JOIN public.mesas m ON c.mesa_id = m.id
                 WHERE c.id = $1
             `, [id]),
+            
+            // ✅ DETALLES CON PROMOCIONES
             db.query(`
-                SELECT cd.*, p.descripcion, p.presentacion
+                SELECT 
+                    cd.*, 
+                    p.descripcion, 
+                    p.presentacion,
+                    p.precio_venta as precioventa_original,
+                    cd.precio_venta,
+                    
+                    -- 🎯 TRANSFORMAR A OBJETO promocion_activa
+                    CASE 
+                        WHEN cd.promocion_id IS NOT NULL THEN 
+                            json_build_object(
+                                'id', prom.id,
+                                'nombre_promocion', prom.nombre_promocion,
+                                'producto_id', prom.producto_id,
+                                'nuevo_precio_venta', prom.nuevo_precio_venta,
+                                'activo', prom.activo
+                            )
+                        ELSE NULL
+                    END as promocion_activa,
+                    
+                    -- Info legible para chip
+                    CASE 
+                        WHEN cd.promocion_id IS NOT NULL THEN 
+                            CONCAT('🎉 ', prom.nombre_promocion)
+                        ELSE '💰 Precio normal'
+                    END as promocion_info
+
                 FROM public.cuentas_detalle cd
                 JOIN public.productos p ON cd.producto_id = p.id
+                LEFT JOIN public.promociones prom ON cd.promocion_id = prom.id
                 WHERE cd.cuenta_id = $1
-                ORDER BY cd.fecha_creado
+                ORDER BY cd.id
             `, [id])
         ]);
 
@@ -163,34 +194,24 @@ router.get('/:id', async (req, res) => {
     }
 });
 
-
-// ✅ POST /api/cuentas
+// ✅ POST /api/cuentas - SOPORTE PROMOCIONES
 router.post('/', async (req, res) => {
     const { cliente, total, tipo_cuenta, mesa_id, detalles } = req.body;
     
     try {
-        // ✅: JavaScript TZ El Salvador (más seguro)
         const fechaActual = new Date().toLocaleDateString('sv-SV', { 
             timeZone: 'America/El_Salvador',
-            year: 'numeric', 
-            month: '2-digit', 
-            day: '2-digit' 
-        }).split('/').reverse().join('-'); // "2026-01-02"
+            year: 'numeric', month: '2-digit', day: '2-digit' 
+        }).split('/').reverse().join('-');
 
-        // 1. Verificar mesa (si aplica)
         if (mesa_id) {
             const mesa = await db.query('SELECT estado FROM public.mesas WHERE id = $1', [mesa_id]);
             if (mesa.rows[0]?.estado === 'disponible') {
-                // ✅ Comillas SIMPLES para strings
-                const updateResult = await db.query(
-                    'UPDATE public.mesas SET estado = $1 WHERE id = $2 RETURNING id, estado, numero_mesa',
-                    ['ocupada', mesa_id]
-                );
-                console.log('🪑 UPDATE RESULT:', updateResult.rows);  // ← ¿Vacío? ¿Estado correcto?
+                await db.query('UPDATE public.mesas SET estado = $1 WHERE id = $2', ['ocupada', mesa_id]);
             }
         }
         
-        // 2. Crear cuenta
+        // 1. Crear cuenta
         const nuevaCuenta = await db.query(
             `INSERT INTO public.cuentas (cliente, total, tipo_cuenta, mesa_id, fecha_creado) 
             VALUES ($1, $2, $3, $4, $5) RETURNING id`,
@@ -199,12 +220,21 @@ router.post('/', async (req, res) => {
         
         const cuentaId = nuevaCuenta.rows[0].id;
         
-        // 3. Insertar detalles
+        // 2. ✅ INSERT DETALLES CON PROMOCIONES
         for (const detalle of detalles) {
             await db.query(
-                `INSERT INTO public.cuentas_detalle (cuenta_id, producto_id, cantidad_vendida, precio_compra_actual, precio_venta, fecha_creado)
-                VALUES ($1, $2, $3, $4, $5, $6)`,
-                [cuentaId, detalle.producto_id, detalle.cantidad_vendida, detalle.precio_compra_actual, detalle.precio_venta, fechaActual]
+                `INSERT INTO public.cuentas_detalle 
+                (cuenta_id, producto_id, cantidad_vendida, precio_compra_actual, precio_venta, promocion_id, fecha_creado)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                [
+                    cuentaId, 
+                    detalle.producto_id, 
+                    detalle.cantidad_vendida, 
+                    detalle.precio_compra_actual, 
+                    detalle.precio_venta,  // 🎯 precio final (con/sin promo)
+                    detalle.promocion_id || null,  // ✅ NUEVO CAMPO
+                    fechaActual
+                ]
             );
         }
         
@@ -271,85 +301,63 @@ router.patch('/:id/pagar', async (req, res) => {
     }
 });
 
-// ✅ Agregar este endpoint a cuentas.js
-// ✅ PATCH /api/cuentas/:id - ESTILO IDENTICO al GET
+// ✅ PATCH /api/cuentas/:id - CON PROMOCIONES
 router.patch('/:id', async (req, res) => {
     try {
-        // ✅ MÉTODO 2: JavaScript TZ El Salvador (más seguro)
         const fechaActual = new Date().toLocaleDateString('sv-SV', { 
             timeZone: 'America/El_Salvador',
-            year: 'numeric', 
-            month: '2-digit', 
-            day: '2-digit' 
-        }).split('/').reverse().join('-'); // "2026-01-02"
+            year: 'numeric', month: '2-digit', day: '2-digit' 
+        }).split('/').reverse().join('-');
 
         const { id } = req.params;
         const { cliente, tipo_cuenta, mesa_id, detalles } = req.body;
 
-        // 1. Verificar cuenta existe y es pendiente
+        // Verificar cuenta pendiente
         const cuentaCheck = await db.query(
             'SELECT id FROM public.cuentas WHERE id = $1 AND estado = $2', 
             [id, 'pendiente']
         );
 
         if (cuentaCheck.rows.length === 0) {
-            return res.status(404).json({ 
-                success: false, 
-                error: `Cuenta ${id} no encontrada o ya pagada`
-            });
+            return res.status(404).json({ success: false, error: `Cuenta ${id} no encontrada o ya pagada` });
         }
 
-        // 2. Promise.all para UPDATE y DELETE (estilo GET)
+        // DELETE + INSERT detalles con promociones
         const [updateResult, deleteResult] = await Promise.all([
-            // Actualizar cuenta principal
-            db.query(`
-                UPDATE public.cuentas 
-                SET cliente = $1, tipo_cuenta = $2, mesa_id = $3 
-                WHERE id = $4
-            `, [cliente, tipo_cuenta, mesa_id || null, id]),
-            
-            // Borrar detalles viejos
+            db.query(`UPDATE public.cuentas SET cliente = $1, tipo_cuenta = $2, mesa_id = $3 WHERE id = $4`, 
+                [cliente, tipo_cuenta, mesa_id || null, id]),
             db.query('DELETE FROM public.cuentas_detalle WHERE cuenta_id = $1', [id])
         ]);
 
-        // 3. Insertar nuevos detalles (si existen)
+        // ✅ INSERT NUEVOS DETALLES CON PROMO
         if (detalles && detalles.length > 0) {
             for (const detalle of detalles) {
                 await db.query(`
                     INSERT INTO public.cuentas_detalle 
-                    (cuenta_id, producto_id, cantidad_vendida, precio_venta, precio_compra_actual, fecha_creado)
-                    VALUES ($1, $2, $3, $4, $5, $6)
+                    (cuenta_id, producto_id, cantidad_vendida, precio_compra_actual, precio_venta, promocion_id, fecha_creado)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
                 `, [
                     id, 
                     detalle.producto_id, 
                     parseInt(detalle.cantidad_vendida), 
-                    parseFloat(detalle.precio_venta),
                     parseFloat(detalle.precio_compra_actual) || 0,
+                    parseFloat(detalle.precio_venta),  // precio final aplicado
+                    detalle.promocion_id || null,  // ✅ promocion_id
                     fechaActual
                 ]);
             }
         }
 
-        // 4. Recalcular total
+        // Recalcular total
         const totalResult = await db.query(`
             SELECT COALESCE(SUM(cantidad_vendida * precio_venta), 0) as total
-            FROM public.cuentas_detalle 
-            WHERE cuenta_id = $1
-        `, [id]);
-
-        const total = parseFloat(totalResult.rows[0].total) || 0.00;
+            FROM public.cuentas_detalle WHERE cuenta_id = $1`, [id]);
         
-        await db.query(
-            'UPDATE public.cuentas SET total = $1 WHERE id = $2', 
-            [total, id]
-        );
+        const total = parseFloat(totalResult.rows[0].total) || 0.00;
+        await db.query('UPDATE public.cuentas SET total = $1 WHERE id = $2', [total, id]);
 
         if (mesa_id) {
-            const updateResult = await db.query(
-                    'UPDATE public.mesas SET estado = $1 WHERE id = $2 RETURNING id, estado, numero_mesa',
-                    ['ocupada', mesa_id]
-                );
-                console.log('🪑 UPDATE RESULT:', updateResult.rows);  // ← ¿Vacío? ¿Estado correcto?
+            await db.query('UPDATE public.mesas SET estado = $1 WHERE id = $2', ['ocupada', mesa_id]);
         }
 
         res.json({
@@ -360,11 +368,7 @@ router.patch('/:id', async (req, res) => {
 
     } catch (error) {
         console.error('🚨 ERROR PATCH cuentas:', error.message);
-        res.status(500).json({ 
-            success: false, 
-            error: error.message,
-            debug: 'Verifica: public.cuentas_detalle (columnas: cuenta_id, producto_id, cantidad_vendida, precio_venta)'
-        });
+        res.status(500).json({ success: false, error: error.message });
     }
 });
 

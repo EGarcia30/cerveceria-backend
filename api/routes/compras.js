@@ -138,7 +138,7 @@ router.post('/', async (req, res) => {
             year: 'numeric', 
             month: '2-digit', 
             day: '2-digit' 
-        }).split('/').reverse().join('-'); // "2026-01-02"
+        }).split('/').reverse().join('-'); //
         
         // 1. Crear compra CON fecha solo
         const compraResult = await db.query(

@@ -26,7 +26,8 @@ router.get('/', async (req, res) => {
             cantidad_minima::numeric,
             cantidad_maxima::numeric,
             precio_compra::numeric,        -- ✅ Fuerza numeric
-            precio_venta::numeric,         -- ✅ Fuerza numeric
+            precio_venta::numeric,          -- ✅ Fuerza numeric
+            precio_venta::numeric as precio_venta_original,       -- ✅ Fuerza numeric
             fecha_creado, 
             activo
         FROM public.productos 
@@ -70,6 +71,44 @@ router.get('/', async (req, res) => {
         success: false,
         message: 'Error en el servidor',
         error: error.message
+        });
+    }
+});
+
+// GET /api/productos/all - Lista completa de productos activos sin paginación
+router.get('/all', async (req, res) => {
+    try {
+        const query = `
+        SELECT 
+            id, 
+            descripcion, 
+            proveedor, 
+            presentacion,
+            cantidad_disponible::numeric,
+            cantidad_minima::numeric,
+            cantidad_maxima::numeric,
+            precio_compra::numeric,
+            precio_venta::numeric,
+            fecha_creado, 
+            activo
+        FROM public.productos 
+        WHERE activo = true
+        ORDER BY descripcion ASC`; // Ordenado alfabéticamente para facilitar la búsqueda
+
+        const result = await db.query(query);
+
+        res.json({
+            success: true,
+            count: result.rowCount,
+            data: result.rows
+        });
+
+    } catch (error) {
+        console.error('Error al obtener todos los productos:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error en el servidor',
+            error: error.message
         });
     }
 });
