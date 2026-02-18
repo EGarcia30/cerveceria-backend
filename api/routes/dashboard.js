@@ -67,8 +67,7 @@ router.get('/ventas', async (req, res) => {
         const fechaSV = getFechaSV();
         const horaSV = new Date().toLocaleString('sv-SV', { 
             timeZone: 'America/El_Salvador', 
-            hour: '2-digit', 
-            minutes: '2-digit',
+            hour: '2-digit',
             hour12: false 
         }).split(' ')[1].split(':')[0];
                 
@@ -161,8 +160,7 @@ router.get('/', async (req, res) => {
         const fechaSV = getFechaSV();
         const horaSV = new Date().toLocaleString('sv-SV', { 
             timeZone: 'America/El_Salvador', 
-            hour: '2-digit', 
-            minutes: '2-digit',
+            hour: '2-digit',
             hour12: false 
         }).split(' ')[1].split(':')[0];
 
