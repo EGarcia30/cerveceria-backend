@@ -201,7 +201,9 @@ router.post('/', async (req, res) => {
     try {
         const fechaActual = new Date().toLocaleDateString('sv-SV', { 
             timeZone: 'America/El_Salvador',
-            year: 'numeric', month: '2-digit', day: '2-digit' 
+            year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
         }).split('/').reverse().join('-');
 
         if (mesa_id) {
@@ -306,7 +308,9 @@ router.patch('/:id', async (req, res) => {
     try {
         const fechaActual = new Date().toLocaleDateString('sv-SV', { 
             timeZone: 'America/El_Salvador',
-            year: 'numeric', month: '2-digit', day: '2-digit' 
+            year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
         }).split('/').reverse().join('-');
 
         const { id } = req.params;

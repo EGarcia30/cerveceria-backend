@@ -137,7 +137,10 @@ router.post('/', async (req, res) => {
             timeZone: 'America/El_Salvador',
             year: 'numeric', 
             month: '2-digit', 
-            day: '2-digit' 
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
         }).split('/').reverse().join('-'); //
         
         // 1. Crear compra CON fecha solo
@@ -175,7 +178,6 @@ router.post('/', async (req, res) => {
         });
     }
 });
-
 
 // ✅ PATCH /api/compras/:id/pagar - MARCAR PAGADO + ACTUALIZAR STOCK
 router.patch('/:id/pagar', async (req, res) => {

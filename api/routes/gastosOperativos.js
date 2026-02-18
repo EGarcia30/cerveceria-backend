@@ -121,11 +121,11 @@ router.post('/', async (req, res) => {
         }
 
         // ✅ HORA EL SALVADOR (CST UTC-6)
-        const fechaLocal = new Date().toLocaleString('sv-SV', {
+        const fechaLocal = new Date().toLocaleDateString('sv-SV', { 
             timeZone: 'America/El_Salvador',
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit',
+            year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
         }).split('/').reverse().join('-');
 
         // 1. INSERTAR GASTO PRINCIPAL
@@ -301,6 +301,9 @@ router.patch('/:id/estado', async (req, res) => {
             year: 'numeric',
             month: '2-digit',
             day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
         }).split('/').reverse().join('-');
 
         const updateQuery = `
