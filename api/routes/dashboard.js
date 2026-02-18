@@ -54,10 +54,24 @@ router.get('/ventas', async (req, res) => {
         let whereClause = '';
         
         // 🌙 TZ EL SALVADOR
-        const nowSV = new Date().toLocaleString('sv-SV', { timeZone: 'America/El_Salvador' });
-        const horaSV = new Date(nowSV).getHours();
-        const fechaSV = nowSV.split(' ')[0].split('-').reverse().join('-');
-        
+        function getFechaSV() {
+            const now = new Date().toLocaleString('sv-SV', { 
+                timeZone: 'America/El_Salvador',
+                year: 'numeric', 
+                month: '2-digit', 
+                day: '2-digit' 
+            });
+            return now.split('/').reverse().join('-'); // YYYY-MM-DD ✅
+        }
+
+        const fechaSV = getFechaSV();
+        const horaSV = new Date().toLocaleString('sv-SV', { 
+            timeZone: 'America/El_Salvador', 
+            hour: '2-digit', 
+            minutes: '2-digit',
+            hour12: false 
+        }).split(' ')[1].split(':')[0];
+                
         switch(filtro) {
             case 'turno':
                 if (horaSV >= 18) {
@@ -134,9 +148,23 @@ router.get('/', async (req, res) => {
         const filtro = req.query.filtro || 'turno';
         
         // 🌙 TZ EL SALVADOR
-        const nowSV = new Date().toLocaleString('sv-SV', { timeZone: 'America/El_Salvador' });
-        const horaSV = new Date(nowSV).getHours();
-        const fechaSV = nowSV.split(' ')[0].split('-').reverse().join('-');
+        function getFechaSV() {
+            const now = new Date().toLocaleString('sv-SV', { 
+                timeZone: 'America/El_Salvador',
+                year: 'numeric', 
+                month: '2-digit', 
+                day: '2-digit' 
+            });
+            return now.split('/').reverse().join('-'); // YYYY-MM-DD ✅
+        }
+
+        const fechaSV = getFechaSV();
+        const horaSV = new Date().toLocaleString('sv-SV', { 
+            timeZone: 'America/El_Salvador', 
+            hour: '2-digit', 
+            minutes: '2-digit',
+            hour12: false 
+        }).split(' ')[1].split(':')[0];
 
         let whereClauseVentas = '';
         let whereClauseGastos = '';
