@@ -64,12 +64,16 @@ router.get('/ventas', async (req, res) => {
             return now.split('/').reverse().join('-'); // YYYY-MM-DD ✅
         }
 
+        function getHoraSV() {
+            return new Date().toLocaleString('sv-SV', { 
+                timeZone: 'America/El_Salvador', 
+                hour: 'numeric', 
+                hour12: false 
+            }).split(':')[0] || '0'; // Solo horas, fallback
+        }
+
         const fechaSV = getFechaSV();
-        const horaSV = new Date().toLocaleString('sv-SV', { 
-            timeZone: 'America/El_Salvador', 
-            hour: '2-digit',
-            hour12: false 
-        }).split(' ')[1].split(':')[0];
+        const horaSV = parseInt(getHoraSV())
                 
         switch(filtro) {
             case 'turno':
@@ -157,12 +161,16 @@ router.get('/', async (req, res) => {
             return now.split('/').reverse().join('-'); // YYYY-MM-DD ✅
         }
 
+        function getHoraSV() {
+            return new Date().toLocaleString('sv-SV', { 
+                timeZone: 'America/El_Salvador', 
+                hour: 'numeric', 
+                hour12: false 
+            }).split(':')[0] || '0'; // Solo horas, fallback
+        }
+
         const fechaSV = getFechaSV();
-        const horaSV = new Date().toLocaleString('sv-SV', { 
-            timeZone: 'America/El_Salvador', 
-            hour: '2-digit',
-            hour12: false 
-        }).split(' ')[1].split(':')[0];
+        const horaSV = parseInt(getHoraSV())
 
         let whereClauseVentas = '';
         let whereClauseGastos = '';
