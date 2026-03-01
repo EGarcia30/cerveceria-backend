@@ -7,70 +7,92 @@ const db = require('../config/database');
 // RUTAS: PRODUCTOS (INVENTARIO)
 // ============================================
 
-// GET /api/productos - Lista paginada de productos
+// GET /api/productos - Lista paginada con FILTRO POR CATEGORÍA (FIX)
 router.get('/', async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
         const offset = (page - 1) * limit;
+        const categoria = req.query.categoria || 'N/A';
 
-        // Consulta principal con paginación y solo activos
-        // En la consulta SQL, agrega CAST:
-        const productosQuery = `
-        SELECT 
-            id, 
-            descripcion, 
-            proveedor, 
-            presentacion,
-            cantidad_disponible::numeric,  -- ✅ Fuerza numeric
-            cantidad_minima::numeric,
-            cantidad_maxima::numeric,
-            precio_compra::numeric,        -- ✅ Fuerza numeric
-            precio_venta::numeric,          -- ✅ Fuerza numeric
-            precio_venta::numeric as precio_venta_original,       -- ✅ Fuerza numeric
-            fecha_creado, 
-            activo
-        FROM public.productos 
-        WHERE activo = true
-        ORDER BY id DESC
-        LIMIT $1 OFFSET $2
-        `;
+        // ✅ Arreglar parámetros DESDE el inicio
+        let productosQuery, countQuery, queryParams = [];
 
-
-        // Conteo total para paginación
-        const countQuery = `
-        SELECT COUNT(*) as total 
-        FROM public.productos 
-        WHERE activo = true
-        `;
+        if (categoria !== 'N/A') {
+            // ✅ CON filtro categoría
+            productosQuery = `
+            SELECT 
+                p.id, p.descripcion, p.proveedor, p.presentacion,
+                p.cantidad_disponible::numeric, p.cantidad_minima::numeric,
+                p.cantidad_maxima::numeric, p.precio_compra::numeric, 
+                p.precio_venta::numeric, p.precio_venta::numeric as precio_venta_original,
+                p.fecha_creado, p.activo, c.codigo as categoria_codigo, c.nombre as categoria_nombre, c.id as categoria_id
+            FROM public.productos p
+            LEFT JOIN public.categorias c ON p.categoria_id = c.id
+            WHERE p.activo = true AND c.codigo = $1
+            ORDER BY p.id DESC LIMIT $2 OFFSET $3
+            `;
+            
+            countQuery = `
+            SELECT COUNT(*) as total 
+            FROM public.productos p
+            LEFT JOIN public.categorias c ON p.categoria_id = c.id
+            WHERE p.activo = true AND c.codigo = $1
+            `;
+            
+            queryParams = [categoria, limit, offset];
+        } else {
+            // ✅ SIN filtro categoría
+            productosQuery = `
+            SELECT 
+                p.id, p.descripcion, p.proveedor, p.presentacion,
+                p.cantidad_disponible::numeric, p.cantidad_minima::numeric,
+                p.cantidad_maxima::numeric, p.precio_compra::numeric, 
+                p.precio_venta::numeric, p.precio_venta::numeric as precio_venta_original,
+                p.fecha_creado, p.activo, c.codigo as categoria_codigo, c.nombre as categoria_nombre, c.id as categoria_id
+            FROM public.productos p
+            LEFT JOIN public.categorias c ON p.categoria_id = c.id
+            WHERE p.activo = true
+            ORDER BY p.id DESC LIMIT $1 OFFSET $2
+            `;
+            
+            countQuery = `
+            SELECT COUNT(*) as total 
+            FROM public.productos p
+            WHERE p.activo = true
+            `;
+            
+            queryParams = [limit, offset];
+        }
 
         const [productos, countResult] = await Promise.all([
-        db.query(productosQuery, [limit, offset]),
-        db.query(countQuery)
+            db.query(productosQuery, queryParams),
+            db.query(countQuery, categoria !== 'N/A' ? [categoria] : [])
         ]);
 
         const totalItems = parseInt(countResult.rows[0].total);
         const totalPages = Math.ceil(totalItems / limit);
 
         res.json({
-        success: true,
-        data: productos.rows,
-        pagination: {
-            page,
-            limit,
-            totalItems,
-            totalPages,
-            hasNext: page < totalPages,
-            hasPrev: page > 1
-        }
+            success: true,
+            data: productos.rows,
+            pagination: {
+                page,
+                limit,
+                totalItems,
+                totalPages,
+                hasNext: page < totalPages,
+                hasPrev: page > 1,
+                categoria: categoria
+            }
         });
 
     } catch (error) {
         console.error('Error al obtener productos:', error);
         res.status(500).json({
-        success: false,
-        message: 'Error en el servidor',
-        error: error.message
+            success: false,
+            message: 'Error en el servidor',
+            error: error.message
         });
     }
 });
@@ -162,7 +184,7 @@ router.patch('/:id/toggle', async (req, res) => {
     }
 });
 
-// 2. EDITAR Producto (UPDATE completo)
+// ✅ PATCH /api/productos/:id - CON CATEGORÍA Completa (INSERT + SELECT)
 router.patch('/:id', async (req, res) => {
     try {
         const { id } = req.params;
@@ -176,7 +198,7 @@ router.patch('/:id', async (req, res) => {
             });
         }
 
-        // Construir UPDATE dinámico
+        // 1. UPDATE dinámico
         const setClause = Object.keys(updates)
             .map(key => `${key} = $${Object.keys(updates).indexOf(key) + 1}`)
             .join(', ');
@@ -185,25 +207,40 @@ router.patch('/:id', async (req, res) => {
             UPDATE public.productos 
             SET ${setClause}
             WHERE id = $${Object.keys(updates).length + 1}
-            RETURNING id, descripcion, proveedor, presentacion,
-                    cantidad_disponible::numeric, cantidad_minima::numeric, 
-                    cantidad_maxima::numeric, precio_compra::numeric, 
-                    precio_venta::numeric, fecha_creado, activo
+            RETURNING id
         `;
 
         const values = [...Object.values(updates), id];
-        const result = await db.query(updateQuery, values);
+        const updateResult = await db.query(updateQuery, values);
 
-        if (result.rows.length === 0) {
+        if (updateResult.rows.length === 0) {
             return res.status(404).json({ 
                 success: false,
                 message: 'Producto no encontrado' 
             });
         }
 
+        const updatedId = updateResult.rows[0].id;
+
+        // 2. SELECT completo CON CATEGORÍA
+        const selectQuery = `
+            SELECT 
+                p.id, p.descripcion, p.proveedor, p.presentacion,
+                p.cantidad_disponible::numeric, p.cantidad_minima::numeric, 
+                p.cantidad_maxima::numeric, p.precio_compra::numeric, 
+                p.precio_venta::numeric, p.categoria_id, p.fecha_creado, p.activo,
+                c.codigo as categoria_codigo,
+                c.nombre as categoria_nombre
+            FROM public.productos p
+            LEFT JOIN public.categorias c ON p.categoria_id = c.id
+            WHERE p.id = $1
+        `;
+        
+        const productoCompleto = await db.query(selectQuery, [updatedId]);
+        
         res.json({
             success: true,
-            data: result.rows[0]
+            data: productoCompleto.rows[0]
         });
 
     } catch (error) {
@@ -216,12 +253,11 @@ router.patch('/:id', async (req, res) => {
     }
 });
 
-// ✅ POST /api/productos - CREAR con HORA EL SALVADOR
+// ✅ POST /api/productos - CREAR nuevo producto con FECHA LOCAL (sin hora) y CATEGORÍA
 router.post('/', async (req, res) => {
     try {
         const producto = req.body;
         
-        // ✅ HORA EL SALVADOR (CST UTC-6)
         const fechaLocal = new Date().toLocaleString('sv-SV', {
             timeZone: 'America/El_Salvador',
             year: 'numeric',
@@ -229,30 +265,45 @@ router.post('/', async (req, res) => {
             day: '2-digit',
         }).split('/').reverse().join('-');
 
+        // 1. INSERT básico
         const insertQuery = `
             INSERT INTO public.productos (
                 descripcion, proveedor, presentacion, 
                 cantidad_disponible, cantidad_minima, cantidad_maxima,
-                precio_compra, precio_venta, activo, fecha_creado
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, $9)
-            RETURNING id, descripcion, proveedor, presentacion,
-                    cantidad_disponible::numeric, cantidad_minima::numeric, 
-                    cantidad_maxima::numeric, precio_compra::numeric, 
-                    precio_venta::numeric, fecha_creado, activo
+                precio_compra, precio_venta, categoria_id, activo, fecha_creado
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, 1), true, $10)
+            RETURNING id
         `;
         
-        const values = [
+        const insertValues = [
             producto.descripcion, producto.proveedor, producto.presentacion,
             producto.cantidad_disponible, producto.cantidad_minima, producto.cantidad_maxima,
             producto.precio_compra, producto.precio_venta,
-            fechaLocal  // ✅ $9 = HORA EL SALVADOR
+            producto.categoria_id,
+            fechaLocal
         ];
         
-        const result = await db.query(insertQuery, values);
+        const insertResult = await db.query(insertQuery, insertValues);
+        const newId = insertResult.rows[0].id;
+
+        // 2. SELECT completo con categoría
+        const selectQuery = `
+            SELECT 
+                p.id, p.descripcion, p.proveedor, p.presentacion,
+                p.cantidad_disponible::numeric, p.cantidad_minima::numeric, 
+                p.cantidad_maxima::numeric, p.precio_compra::numeric, 
+                p.precio_venta::numeric, p.categoria_id, p.fecha_creado, p.activo,
+                c.codigo as categoria_codigo, c.nombre as categoria_nombre
+            FROM public.productos p
+            LEFT JOIN public.categorias c ON p.categoria_id = c.id
+            WHERE p.id = $1
+        `;
+        
+        const productoCompleto = await db.query(selectQuery, [newId]);
         
         res.json({
             success: true,
-            data: result.rows[0]
+            data: productoCompleto.rows[0]
         });
     } catch (error) {
         console.error('Error al crear producto:', error);

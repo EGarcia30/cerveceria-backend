@@ -11,6 +11,7 @@ const dashboardRouter = require('./routes/dashboard');
 const promocionesRouter = require('./routes/promociones')
 const usuariosRouter = require('./routes/usuarios')
 const gastosOperativosRouter = require('./routes/gastosOperativos')
+const categoriasRouter = require('./routes/categorias')
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -28,6 +29,7 @@ app.use('/api/dashboard', dashboardRouter);
 app.use('/api/promociones', promocionesRouter);
 app.use('/api/usuarios', usuariosRouter);
 app.use('/api/gastos-operativos', gastosOperativosRouter);
+app.use('/api/categorias', categoriasRouter);
 
 app.get('/', (req, res) => res.json({ message: 'Cervecería API v1.0.0' }));
 
