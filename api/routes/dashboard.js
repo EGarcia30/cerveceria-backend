@@ -78,13 +78,13 @@ router.get('/ventas', async (req, res) => {
         switch(filtro) {
             case 'turno':
                 if (horaSV >= 18) {
-                    whereClause = `c.fecha_creado >= '${fechaSV} 18:00:00'`;
+                    whereClause = `c.fecha_creado >= '${fechaSV} 17:00:00'`;
                 } else {
                     const ayerSV = new Date(Date.now() - 86400000).toLocaleDateString('sv-SV', { 
                         timeZone: 'America/El_Salvador', 
                         year: 'numeric', month: '2-digit', day: '2-digit' 
                     }).split('/').reverse().join('-');
-                    whereClause = `(c.fecha_creado >= '${ayerSV} 18:00:00' AND c.fecha_creado < '${fechaSV} 06:00:00')`;
+                    whereClause = `(c.fecha_creado >= '${ayerSV} 17:00:00' AND c.fecha_creado < '${fechaSV} 06:00:00')`;
                 }
                 break;
             case 'hoy':
@@ -180,8 +180,8 @@ router.get('/', async (req, res) => {
             case 'turno':
                 if (horaSV >= 18) {
                     // 🌙 TURNO NOCHE: 18:00 HOY → 06:00 MAÑANA
-                    whereClauseVentas = `c.fecha_creado >= '${fechaSV} 18:00:00'`;
-                    whereClauseGastos = `go.fecha_creado >= '${fechaSV} 18:00:00'`;
+                    whereClauseVentas = `c.fecha_creado >= '${fechaSV} 17:00:00'`;
+                    whereClauseGastos = `go.fecha_creado >= '${fechaSV} 17:00:00'`;
                 } else {
                     // 🌙 TURNO NOCHE 00:00-05:59: AYER 18:00 → HOY 06:00
                     const ayerSV = new Date(Date.now() - 86400000).toLocaleDateString('sv-SV', { 
@@ -189,8 +189,8 @@ router.get('/', async (req, res) => {
                         year: 'numeric', month: '2-digit', day: '2-digit' 
                     }).split('/').reverse().join('-');
                     
-                    whereClauseVentas = `(c.fecha_creado >= '${ayerSV} 18:00:00' AND c.fecha_creado < '${fechaSV} 06:00:00')`;
-                    whereClauseGastos = `(go.fecha_creado >= '${ayerSV} 18:00:00' AND go.fecha_creado < '${fechaSV} 06:00:00')`;
+                    whereClauseVentas = `(c.fecha_creado >= '${ayerSV} 17:00:00' AND c.fecha_creado < '${fechaSV} 06:00:00')`;
+                    whereClauseGastos = `(go.fecha_creado >= '${ayerSV} 17:00:00' AND go.fecha_creado < '${fechaSV} 06:00:00')`;
                 }
                 break;
                 
