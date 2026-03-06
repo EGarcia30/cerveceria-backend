@@ -175,15 +175,15 @@ router.get('/', async (req, res) => {
         let whereClauseVentas = '';
         let whereClauseGastos = '';
 
-        // ✅ TURNO COMPLETO 18:00→06:00 (CRUZADO)
+        // ✅ TURNO COMPLETO 17:00→06:00 (CRUZADO)
         switch(filtro) {
             case 'turno':
-                if (horaSV >= 18) {
-                    // 🌙 TURNO NOCHE: 18:00 HOY → 06:00 MAÑANA
+                if (horaSV >= 17) {
+                    // 🌙 TURNO NOCHE: 17:00 HOY → 06:00 MAÑANA
                     whereClauseVentas = `c.fecha_creado >= '${fechaSV} 17:00:00'`;
                     whereClauseGastos = `go.fecha_creado >= '${fechaSV} 17:00:00'`;
                 } else {
-                    // 🌙 TURNO NOCHE 00:00-05:59: AYER 18:00 → HOY 06:00
+                    // 🌙 TURNO NOCHE 00:00-05:59: AYER 17:00 → HOY 06:00
                     const ayerSV = new Date(Date.now() - 86400000).toLocaleDateString('sv-SV', { 
                         timeZone: 'America/El_Salvador', 
                         year: 'numeric', month: '2-digit', day: '2-digit' 
