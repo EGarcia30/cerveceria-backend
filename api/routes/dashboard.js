@@ -1,4 +1,4 @@
-// api/routes/dashboard.js - COMPLETO ✅ TURNO 18:00→06:00 CRUZADO
+// api/routes/dashboard.js - COMPLETO ✅ TURNO 17:00→06:00 CRUZADO
 const express = require('express');
 const router = express.Router();
 const db = require('../config/database');
@@ -77,7 +77,7 @@ router.get('/ventas', async (req, res) => {
                 
         switch(filtro) {
             case 'turno':
-                if (horaSV >= 18) {
+                if (horaSV >= 17) {
                     whereClause = `c.fecha_creado >= '${fechaSV} 17:00:00'`;
                 } else {
                     const ayerSV = new Date(Date.now() - 86400000).toLocaleDateString('sv-SV', { 
