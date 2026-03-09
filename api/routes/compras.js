@@ -179,6 +179,91 @@ router.post('/', async (req, res) => {
     }
 });
 
+// ✅ PUT /api/compras/:id - EDITAR COMPRA (solo si no está pagada)
+router.put('/:id', async (req, res) => {
+    const { id } = req.params;
+    const { proveedor, direccion, total, estado, detalles } = req.body;
+    
+    try {
+        await db.query('BEGIN');
+        
+        // 1. Verificar si la compra existe y NO está pagada
+        const verificaCompra = await db.query(
+            `SELECT id, estado FROM public.compras WHERE id = $1`,
+            [id]
+        );
+        
+        if (verificaCompra.rows.length === 0) {
+            await db.query('ROLLBACK');
+            return res.status(404).json({ 
+                success: false,
+                error: 'Compra no encontrada' 
+            });
+        }
+        
+        if (verificaCompra.rows[0].estado === 'pagado') {
+            await db.query('ROLLBACK');
+            return res.status(400).json({ 
+                success: false,
+                error: 'No se pueden editar compras ya pagadas' 
+            });
+        }
+        
+        // ✅ FECHA ACTUAL para auditoría (mantener original)
+        const fechaActual = new Date().toLocaleDateString('sv-SV', { 
+            timeZone: 'America/El_Salvador',
+            year: 'numeric', 
+            month: '2-digit', 
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+        }).split('/').reverse().join('-');
+        
+        // 2. ACTUALIZAR compra principal
+        const updateCompra = await db.query(
+            `UPDATE public.compras 
+             SET proveedor = $1, 
+                 direccion = $2, 
+                 total = $3
+             WHERE id = $4 RETURNING *`,
+            [proveedor, direccion, total, id]
+        );
+        
+        // 3. ELIMINAR detalles anteriores
+        await db.query(
+            `DELETE FROM public.compras_detalle WHERE compra_id = $1`,
+            [id]
+        );
+        
+        // 4. INSERTAR nuevos detalles
+        for (const detalle of detalles) {
+            await db.query(
+                `INSERT INTO public.compras_detalle 
+                (compra_id, producto_id, cantidad_vendida, precio_compra_actual, precio_venta, fecha_creado)
+                VALUES ($1, $2, $3, $4, $5, $6)`,
+                [id, detalle.producto_id, detalle.cantidad_vendida, detalle.precio_compra_actual, detalle.precio_venta, fechaActual]
+            );
+        }
+        
+        await db.query('COMMIT');
+        
+        res.json({ 
+            success: true, 
+            data: updateCompra.rows[0],
+            message: 'Compra actualizada exitosamente'
+        });
+        
+    } catch (error) {
+        await db.query('ROLLBACK');
+        console.error('🚨 Error editando compra:', error);
+        res.status(500).json({ 
+            success: false,
+            error: error.message 
+        });
+    }
+});
+
 // ✅ PATCH /api/compras/:id/pagar - MARCAR PAGADO + ACTUALIZAR STOCK
 router.patch('/:id/pagar', async (req, res) => {
     const compraId = req.params.id;
