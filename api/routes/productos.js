@@ -10,64 +10,68 @@ const db = require('../config/database');
 // GET /api/productos - Lista paginada con FILTRO POR CATEGORÍA (FIX)
 router.get('/', async (req, res) => {
     try {
+
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
         const offset = (page - 1) * limit;
+
         const categoria = req.query.categoria || 'N/A';
+        const search = req.query.search || '';
 
-        // ✅ Arreglar parámetros DESDE el inicio
-        let productosQuery, countQuery, queryParams = [];
+        let whereConditions = ['p.activo = true'];
+        let params = [];
+        let paramIndex = 1;
 
+        // FILTRO CATEGORIA
         if (categoria !== 'N/A') {
-            // ✅ CON filtro categoría
-            productosQuery = `
-            SELECT 
-                p.id, p.descripcion, p.proveedor, p.presentacion,
-                p.cantidad_disponible::numeric, p.cantidad_minima::numeric,
-                p.cantidad_maxima::numeric, p.precio_compra::numeric, 
-                p.precio_venta::numeric, p.precio_venta::numeric as precio_venta_original,
-                p.fecha_creado, p.activo, c.codigo as categoria_codigo, c.nombre as categoria_nombre, c.id as categoria_id
-            FROM public.productos p
-            LEFT JOIN public.categorias c ON p.categoria_id = c.id
-            WHERE p.activo = true AND c.codigo = $1
-            ORDER BY p.id DESC LIMIT $2 OFFSET $3
-            `;
-            
-            countQuery = `
-            SELECT COUNT(*) as total 
-            FROM public.productos p
-            LEFT JOIN public.categorias c ON p.categoria_id = c.id
-            WHERE p.activo = true AND c.codigo = $1
-            `;
-            
-            queryParams = [categoria, limit, offset];
-        } else {
-            // ✅ SIN filtro categoría
-            productosQuery = `
-            SELECT 
-                p.id, p.descripcion, p.proveedor, p.presentacion,
-                p.cantidad_disponible::numeric, p.cantidad_minima::numeric,
-                p.cantidad_maxima::numeric, p.precio_compra::numeric, 
-                p.precio_venta::numeric, p.precio_venta::numeric as precio_venta_original,
-                p.fecha_creado, p.activo, c.codigo as categoria_codigo, c.nombre as categoria_nombre, c.id as categoria_id
-            FROM public.productos p
-            LEFT JOIN public.categorias c ON p.categoria_id = c.id
-            WHERE p.activo = true
-            ORDER BY p.id DESC LIMIT $1 OFFSET $2
-            `;
-            
-            countQuery = `
-            SELECT COUNT(*) as total 
-            FROM public.productos p
-            WHERE p.activo = true
-            `;
-            
-            queryParams = [limit, offset];
+            whereConditions.push(`c.codigo = $${paramIndex}`);
+            params.push(categoria);
+            paramIndex++;
         }
 
+        // FILTRO BUSQUEDA
+        if (search !== '') {
+            whereConditions.push(`(
+                p.descripcion ILIKE $${paramIndex}
+                OR p.proveedor ILIKE $${paramIndex}
+                OR p.presentacion ILIKE $${paramIndex}
+                OR c.codigo ILIKE $${paramIndex}
+            )`);
+            params.push(`%${search}%`);
+            paramIndex++;
+        }
+
+        const whereClause = whereConditions.join(' AND ');
+
+        const productosQuery = `
+        SELECT 
+            p.id, p.descripcion, p.proveedor, p.presentacion,
+            p.cantidad_disponible::numeric, p.cantidad_minima::numeric,
+            p.cantidad_maxima::numeric, p.precio_compra::numeric, 
+            p.precio_venta::numeric, p.precio_venta::numeric as precio_venta_original,
+            p.fecha_creado, p.activo,
+            c.codigo as categoria_codigo, 
+            c.nombre as categoria_nombre, 
+            c.id as categoria_id
+        FROM public.productos p
+        LEFT JOIN public.categorias c ON p.categoria_id = c.id
+        WHERE ${whereClause}
+        ORDER BY p.id DESC
+        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+        `;
+
+        const countQuery = `
+        SELECT COUNT(*) as total
+        FROM public.productos p
+        LEFT JOIN public.categorias c ON p.categoria_id = c.id
+        WHERE ${whereClause}
+        `;
+
+        const productosParams = [...params, limit, offset];
+
         const [productos, countResult] = await Promise.all([
-            db.query(productosQuery, queryParams),
-            db.query(countQuery, categoria !== 'N/A' ? [categoria] : [])
+            db.query(productosQuery, productosParams),
+            db.query(countQuery, params)
         ]);
 
         const totalItems = parseInt(countResult.rows[0].total);
@@ -83,7 +87,8 @@ router.get('/', async (req, res) => {
                 totalPages,
                 hasNext: page < totalPages,
                 hasPrev: page > 1,
-                categoria: categoria
+                categoria,
+                search
             }
         });
 

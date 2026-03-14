@@ -10,17 +10,43 @@ const db = require('../config/database');
 // ✅ GET /api/compras?page=1&limit=10 - SOLO DATOS BÁSICOS
 router.get('/', async (req, res) => {
     try {
+
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
         const offset = (page - 1) * limit;
+
+        const search = req.query.search || '';
+
+        let whereConditions = [];
+        let params = [];
+        let paramIndex = 1;
+
+        // 🔎 FILTRO DE BÚSQUEDA
+        if (search && search.trim() !== '') {
+
+            whereConditions.push(`(
+                proveedor ILIKE $${paramIndex}
+                OR direccion ILIKE $${paramIndex}
+                OR CAST(id AS TEXT) ILIKE $${paramIndex}
+                OR CAST(total AS TEXT) ILIKE $${paramIndex}
+            )`);
+
+            params.push(`%${search}%`);
+            paramIndex++;
+        }
+
+        const whereClause = whereConditions.length
+            ? `WHERE ${whereConditions.join(' AND ')}`
+            : '';
 
         // Conteo total
         const countQuery = `
             SELECT COUNT(*) as total 
             FROM public.compras
+            ${whereClause}
         `;
 
-        // SOLO compras básicas (SIN JOINs complejos)
+        // Compras con paginación
         const comprasQuery = `
             SELECT 
                 id, 
@@ -30,13 +56,16 @@ router.get('/', async (req, res) => {
                 estado, 
                 fecha_creado
             FROM public.compras
+            ${whereClause}
             ORDER BY id DESC
-            LIMIT $1 OFFSET $2
+            LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
         `;
 
+        const comprasParams = [...params, limit, offset];
+
         const [countResult, comprasResult] = await Promise.all([
-            db.query(countQuery),
-            db.query(comprasQuery, [limit, offset])
+            db.query(countQuery, params),
+            db.query(comprasQuery, comprasParams)
         ]);
 
         const totalItems = parseInt(countResult.rows[0].total);
@@ -46,9 +75,13 @@ router.get('/', async (req, res) => {
             success: true,
             data: comprasResult.rows,
             pagination: {
-                page, limit, totalItems, totalPages,
+                page,
+                limit,
+                totalItems,
+                totalPages,
                 hasNext: page < totalPages,
-                hasPrev: page > 1
+                hasPrev: page > 1,
+                search
             }
         });
 
