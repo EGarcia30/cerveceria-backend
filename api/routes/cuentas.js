@@ -3,50 +3,87 @@ const express = require('express');
 const router = express.Router();
 const db = require('../config/database');
 
-// ✅ GET /api/cuentas - SOLO PENDIENTES
+// ✅ GET /api/cuentas - SOLO PENDIENTES + SEARCH
 router.get('/', async (req, res) => {
     try {
+
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
         const offset = (page - 1) * limit;
 
-        const [countResult, cuentasResult] = await Promise.all([
-            // ✅ COUNT solo pendientes
-            db.query('SELECT COUNT(*) as total FROM public.cuentas WHERE estado = $1', ['pendiente']),
-            db.query(`
-                SELECT 
-                    c.id, 
-                    c.cliente, 
-                    c.total,
-                    c.estado, 
-                    c.tipo_cuenta, 
-                    c.mesa_id, 
-                    m.numero_mesa,
-                    c.fecha_creado
-                FROM public.cuentas c
-                LEFT JOIN public.mesas m ON c.mesa_id = m.id
-                WHERE c.estado = $1  -- ✅ SOLO PENDIENTES
-                ORDER BY c.id DESC
-                LIMIT $2 OFFSET $3
-            `, ['pendiente', limit, offset])
+        const search = req.query.search || '';
+
+        let whereConditions = ['c.estado = $1'];
+        let params = ['pendiente'];
+        let paramIndex = 2;
+
+        // 🔎 FILTRO BUSQUEDA
+        if (search !== '') {
+            whereConditions.push(`(
+                c.cliente ILIKE $${paramIndex}
+                OR CAST(c.id AS TEXT) ILIKE $${paramIndex}
+                OR CAST(m.numero_mesa AS TEXT) ILIKE $${paramIndex}
+            )`);
+
+            params.push(`%${search}%`);
+            paramIndex++;
+        }
+
+        const whereClause = whereConditions.join(' AND ');
+
+        const cuentasQuery = `
+            SELECT 
+                c.id, 
+                c.cliente, 
+                c.total,
+                c.estado, 
+                c.tipo_cuenta, 
+                c.mesa_id, 
+                m.numero_mesa,
+                c.fecha_creado
+            FROM public.cuentas c
+            LEFT JOIN public.mesas m ON c.mesa_id = m.id
+            WHERE ${whereClause}
+            ORDER BY c.id DESC
+            LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+        `;
+
+        const countQuery = `
+            SELECT COUNT(*) as total
+            FROM public.cuentas c
+            LEFT JOIN public.mesas m ON c.mesa_id = m.id
+            WHERE ${whereClause}
+        `;
+
+        const cuentasParams = [...params, limit, offset];
+
+        const [cuentasResult, countResult] = await Promise.all([
+            db.query(cuentasQuery, cuentasParams),
+            db.query(countQuery, params)
         ]);
+
+        const totalItems = parseInt(countResult.rows[0].total);
+        const totalPages = Math.ceil(totalItems / limit);
 
         res.json({
             success: true,
             data: cuentasResult.rows,
             pagination: {
-                page, 
+                page,
                 limit,
-                totalItems: parseInt(countResult.rows[0].total),
-                totalPages: Math.ceil(parseInt(countResult.rows[0].total) / limit)
+                totalItems,
+                totalPages,
+                hasNext: page < totalPages,
+                hasPrev: page > 1,
+                search
             }
         });
+
     } catch (error) {
         console.error('🚨 ERROR GET cuentas pendientes:', error.message);
         res.status(500).json({ 
             success: false, 
-            error: error.message,
-            tableInfo: 'Verifica public.cuentas (estado=pendiente)'
+            error: error.message
         });
     }
 });

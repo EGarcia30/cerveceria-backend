@@ -48,6 +48,98 @@ router.get('/', async (req, res) => {
     }
 });
 
+router.get('/pag', async (req, res) => {
+    try {
+
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        const offset = (page - 1) * limit;
+
+        const search = req.query.search || '';
+
+        let whereConditions = ['pr.activo = true'];
+        let params = [];
+        let paramIndex = 1;
+
+        // 🔎 BUSQUEDA
+        if (search.trim() !== '') {
+
+            whereConditions.push(`(
+                pr.nombre_promocion ILIKE $${paramIndex}
+                OR p.descripcion ILIKE $${paramIndex}
+                OR p.presentacion ILIKE $${paramIndex}
+                OR pr.producto_id::text ILIKE $${paramIndex}
+            )`);
+
+            params.push(`%${search}%`);
+            paramIndex++;
+        }
+
+        const whereClause = whereConditions.join(' AND ');
+
+        const promocionesQuery = `
+        SELECT
+            pr.id,
+            pr.nombre_promocion,
+            pr.producto_id,
+            pr.nuevo_precio_venta::numeric,
+            pr.activo,
+            pr.fecha_inicio,
+            pr.fecha_fin,
+            pr.fecha_creado,
+            p.descripcion AS producto_nombre,
+            p.presentacion
+        FROM public.promociones pr
+        LEFT JOIN public.productos p ON pr.producto_id = p.id
+        WHERE ${whereClause}
+        ORDER BY pr.id DESC
+        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+        `;
+
+        const countQuery = `
+        SELECT COUNT(*) as total
+        FROM public.promociones pr
+        LEFT JOIN public.productos p ON pr.producto_id = p.id
+        WHERE ${whereClause}
+        `;
+
+        const queryParams = [...params, limit, offset];
+
+        const [promociones, countResult] = await Promise.all([
+            db.query(promocionesQuery, queryParams),
+            db.query(countQuery, params)
+        ]);
+
+        const totalItems = parseInt(countResult.rows[0].total);
+        const totalPages = Math.ceil(totalItems / limit);
+
+        res.json({
+            success: true,
+            data: promociones.rows,
+            pagination: {
+                page,
+                limit,
+                totalItems,
+                totalPages,
+                hasNext: page < totalPages,
+                hasPrev: page > 1,
+                search
+            }
+        });
+
+    } catch (error) {
+
+        console.error('Error al obtener promociones:', error);
+
+        res.status(500).json({
+            success: false,
+            message: 'Error en el servidor',
+            error: error.message
+        });
+
+    }
+});
+
 // GET /api/promociones/all
 router.get('/all', async (req, res) => {
     try {
