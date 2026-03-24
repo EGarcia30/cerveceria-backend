@@ -320,4 +320,151 @@ router.get('/', async (req, res) => {
     }
 });
 
+// 🆕 api/routes/dashboard.js - AGREGAR FORMAS PAGO + VUELTO
+// Agregar estas 2 rutas NUEVAS al final del archivo:
+
+// ✅ GET /api/dashboard/formas-pago - Ventas por forma de pago
+router.get('/formas-pago', async (req, res) => {
+    try {
+        const filtro = req.query.filtro || 'turno';
+        
+        // Reutilizar lógica de fechas del dashboard principal
+        function getFechaSV() {
+            const now = new Date().toLocaleString('sv-SV', { 
+                timeZone: 'America/El_Salvador',
+                year: 'numeric', month: '2-digit', day: '2-digit' 
+            });
+            return now.split('/').reverse().join('-');
+        }
+
+        function getHoraSV() {
+            return new Date().toLocaleString('sv-SV', { 
+                timeZone: 'America/El_Salvador', 
+                hour: 'numeric', hour12: false 
+            }).split(':')[0] || '0';
+        }
+
+        const fechaSV = getFechaSV();
+        const horaSV = parseInt(getHoraSV());
+        let whereClause = '';
+
+        // ✅ MISMA LÓGICA DE FILTROS
+        switch(filtro) {
+            case 'turno':
+                if (horaSV >= 17) {
+                    whereClause = `a.fecha_pago >= '${fechaSV} 17:00:00'`;
+                } else {
+                    const ayerSV = new Date(Date.now() - 86400000).toLocaleDateString('sv-SV', { 
+                        timeZone: 'America/El_Salvador', 
+                        year: 'numeric', month: '2-digit', day: '2-digit' 
+                    }).split('/').reverse().join('-');
+                    whereClause = `(a.fecha_pago >= '${ayerSV} 17:00:00' AND a.fecha_pago < '${fechaSV} 06:00:00')`;
+                }
+                break;
+            case 'hoy': whereClause = `DATE(a.fecha_pago) = '${fechaSV}'`; break;
+            case 'semana': whereClause = `DATE(a.fecha_pago) >= '${fechaSV}'::date - INTERVAL '7 days'`; break;
+            case 'mes': whereClause = `DATE(a.fecha_pago) >= '${fechaSV}'::date - INTERVAL '30 days'`; break;
+            case 'año': whereClause = `DATE(a.fecha_pago) >= '${fechaSV}'::date - INTERVAL '365 days'`; break;
+        }
+
+        const formasPagoQuery = `
+            SELECT 
+                fp.codigo,
+                fp.nombre,
+                COALESCE(SUM(a.total_abonado), 0) as total_ventas,
+                COUNT(a.id) as total_transacciones
+            FROM public.abonos_cuenta a
+            JOIN public.forma_pago fp ON a.forma_pago_id = fp.id
+            WHERE ${whereClause}
+            GROUP BY fp.id, fp.codigo, fp.nombre
+            ORDER BY total_ventas DESC
+        `;
+
+        const { rows: formasPago } = await db.query(formasPagoQuery);
+        const totalGeneral = formasPago.reduce((sum, fp) => sum + parseFloat(fp.total_ventas), 0);
+
+        res.json({
+            success: true,
+            filtro,
+            data: formasPago.map(fp => ({
+                ...fp,
+                total_ventas: parseFloat(fp.total_ventas),
+                porcentaje: totalGeneral > 0 ? ((parseFloat(fp.total_ventas) / totalGeneral) * 100).toFixed(1) : 0
+            }))
+        });
+
+    } catch (error) {
+        console.error('Error formas-pago dashboard:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ✅ GET /api/dashboard/vuelto - Total vuelto por período
+router.get('/vuelto', async (req, res) => {
+    try {
+        const filtro = req.query.filtro || 'turno';
+        
+        // Reutilizar misma lógica de fechas
+        function getFechaSV() {
+            const now = new Date().toLocaleString('sv-SV', { 
+                timeZone: 'America/El_Salvador',
+                year: 'numeric', month: '2-digit', day: '2-digit' 
+            });
+            return now.split('/').reverse().join('-');
+        }
+
+        function getHoraSV() {
+            return new Date().toLocaleString('sv-SV', { 
+                timeZone: 'America/El_Salvador', 
+                hour: 'numeric', hour12: false 
+            }).split(':')[0] || '0';
+        }
+
+        const fechaSV = getFechaSV();
+        const horaSV = parseInt(getHoraSV());
+        let whereClause = '';
+
+        switch(filtro) {
+            case 'turno':
+                if (horaSV >= 17) {
+                    whereClause = `c.fecha_creado >= '${fechaSV} 17:00:00'`;
+                } else {
+                    const ayerSV = new Date(Date.now() - 86400000).toLocaleDateString('sv-SV', { 
+                        timeZone: 'America/El_Salvador', 
+                        year: 'numeric', month: '2-digit', day: '2-digit' 
+                    }).split('/').reverse().join('-');
+                    whereClause = `(c.fecha_creado >= '${ayerSV} 17:00:00' AND c.fecha_creado < '${fechaSV} 06:00:00')`;
+                }
+                break;
+            case 'hoy': whereClause = `DATE(c.fecha_creado) = '${fechaSV}'`; break;
+            case 'semana': whereClause = `DATE(c.fecha_creado) >= '${fechaSV}'::date - INTERVAL '7 days'`; break;
+            case 'mes': whereClause = `DATE(c.fecha_creado) >= '${fechaSV}'::date - INTERVAL '30 days'`; break;
+            case 'año': whereClause = `DATE(c.fecha_creado) >= '${fechaSV}'::date - INTERVAL '365 days'`; break;
+        }
+
+        const vueltoQuery = `
+            SELECT 
+                COALESCE(SUM(c.total_vuelto), 0) as total_vuelto,
+                COUNT(CASE WHEN c.total_vuelto > 0 THEN 1 END) as transacciones_con_vuelto
+            FROM public.cuentas c
+            WHERE c.estado = 'pagado' AND ${whereClause} AND c.total_vuelto > 0
+        `;
+
+        const { rows: vueltoData } = await db.query(vueltoQuery);
+
+        res.json({
+            success: true,
+            filtro,
+            data: {
+                total_vuelto: parseFloat(vueltoData[0].total_vuelto),
+                transacciones_con_vuelto: parseInt(vueltoData[0].transacciones_con_vuelto)
+            }
+        });
+
+    } catch (error) {
+        console.error('Error vuelto dashboard:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 module.exports = router;

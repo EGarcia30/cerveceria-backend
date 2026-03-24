@@ -3,34 +3,35 @@ const express = require('express');
 const router = express.Router();
 const db = require('../config/database');
 
-// ✅ GET /api/cuentas - SOLO PENDIENTES + SEARCH
+// ✅ GET /api/cuentas - CON TODOS LOS CAMPOS CALCULADOS
 router.get('/', async (req, res) => {
     try {
-
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
         const offset = (page - 1) * limit;
-
         const search = req.query.search || '';
+        const tipoPago = req.query.tipo_pago || 'contado'; // 👈 NUEVO
 
-        let whereConditions = ['c.estado = $1'];
-        let params = ['pendiente'];
-        let paramIndex = 2;
+        let whereConditions = ['c.estado = $1', `c.tipo_pago = $2`];
+        let params = ['pendiente', tipoPago];
+        let paramIndex = 3;
 
         // 🔎 FILTRO BUSQUEDA
         if (search !== '') {
-            whereConditions.push(`(
-                c.cliente ILIKE $${paramIndex}
-                OR CAST(c.id AS TEXT) ILIKE $${paramIndex}
-                OR CAST(m.numero_mesa AS TEXT) ILIKE $${paramIndex}
-            )`);
-
+            whereConditions.push(`
+                (
+                    c.cliente ILIKE $${paramIndex}
+                    OR CAST(c.id AS TEXT) ILIKE $${paramIndex}
+                    OR CAST(m.numero_mesa AS TEXT) ILIKE $${paramIndex}
+                )
+            `);
             params.push(`%${search}%`);
             paramIndex++;
         }
 
         const whereClause = whereConditions.join(' AND ');
 
+        // ✅ QUERY COMPLETA CON CAMPOS CALCULADOS
         const cuentasQuery = `
             SELECT 
                 c.id, 
@@ -40,16 +41,23 @@ router.get('/', async (req, res) => {
                 c.tipo_cuenta, 
                 c.mesa_id, 
                 m.numero_mesa,
-                c.fecha_creado
+                c.fecha_creado,
+                c.tipo_pago,
+                -- ✅ CAMPOS CALCULADOS EN TIEMPO REAL
+                COALESCE(SUM(a.total_abonado), 0) as total_pagado,
+                GREATEST(c.total - COALESCE(SUM(a.total_abonado), 0), 0) as total_pendiente,
+                GREATEST(COALESCE(SUM(a.total_abonado), 0) - c.total, 0) as total_vuelto
             FROM public.cuentas c
             LEFT JOIN public.mesas m ON c.mesa_id = m.id
+            LEFT JOIN public.abonos_cuenta a ON c.id = a.cuenta_id
             WHERE ${whereClause}
+            GROUP BY c.id, c.cliente, c.total, c.estado, c.tipo_cuenta, c.mesa_id, m.numero_mesa, c.fecha_creado, c.tipo_pago
             ORDER BY c.id DESC
             LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
         `;
 
         const countQuery = `
-            SELECT COUNT(*) as total
+            SELECT COUNT(DISTINCT c.id) as total
             FROM public.cuentas c
             LEFT JOIN public.mesas m ON c.mesa_id = m.id
             WHERE ${whereClause}
@@ -67,7 +75,14 @@ router.get('/', async (req, res) => {
 
         res.json({
             success: true,
-            data: cuentasResult.rows,
+            data: cuentasResult.rows.map(cuenta => ({
+                ...cuenta,
+                // ✅ Convertir a números para frontend
+                total: parseFloat(cuenta.total),
+                total_pagado: parseFloat(cuenta.total_pagado),
+                total_pendiente: parseFloat(cuenta.total_pendiente),
+                total_vuelto: parseFloat(cuenta.total_vuelto)
+            })),
             pagination: {
                 page,
                 limit,
@@ -75,15 +90,53 @@ router.get('/', async (req, res) => {
                 totalPages,
                 hasNext: page < totalPages,
                 hasPrev: page > 1,
-                search
+                search,
+                tipo_pago: tipoPago // 👈 NUEVO
             }
         });
 
     } catch (error) {
-        console.error('🚨 ERROR GET cuentas pendientes:', error.message);
+        console.error('🚨 ERROR GET cuentas:', error.message);
         res.status(500).json({ 
             success: false, 
-            error: error.message
+            error: error.message 
+        });
+    }
+});
+
+// 👇 NUEVO: GET /api/cuentas/totales - SOLO CONTADORES
+router.get('/totales', async (req, res) => {
+    try {
+        const totalesQuery = `
+            SELECT 
+                tipo_pago,
+                COUNT(DISTINCT id) as total_cuentas
+            FROM public.cuentas 
+            WHERE estado = 'pendiente'
+            GROUP BY tipo_pago
+        `;
+
+        const result = await db.query(totalesQuery);
+
+        const totales = {
+            contado: 0,
+            credito: 0
+        };
+
+        result.rows.forEach(row => {
+            totales[row.tipo_pago] = parseInt(row.total_cuentas);
+        });
+
+        res.json({
+            success: true,
+            data: totales
+        });
+
+    } catch (error) {
+        console.error('🚨 ERROR GET totales cuentas:', error.message);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
         });
     }
 });
@@ -231,11 +284,14 @@ router.get('/:id', async (req, res) => {
     }
 });
 
-// ✅ POST /api/cuentas - SOPORTE PROMOCIONES
+/// ✅ POST /cuentas - total_pendiente = total DESDE EL PRINCIPIO
 router.post('/', async (req, res) => {
     const { cliente, total, tipo_cuenta, mesa_id, detalles } = req.body;
     
+    const client = await db.pool.connect();
     try {
+        await client.query("BEGIN");
+
         const fechaActual = new Date().toLocaleDateString('sv-SV', { 
             timeZone: 'America/El_Salvador',
             year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit',
@@ -244,44 +300,58 @@ router.post('/', async (req, res) => {
         }).split('/').reverse().join('-');
 
         if (mesa_id) {
-            const mesa = await db.query('SELECT estado FROM public.mesas WHERE id = $1', [mesa_id]);
+            const mesa = await client.query('SELECT estado FROM public.mesas WHERE id = $1', [mesa_id]);
             if (mesa.rows[0]?.estado === 'disponible') {
-                await db.query('UPDATE public.mesas SET estado = $1 WHERE id = $2', ['ocupada', mesa_id]);
+                await client.query('UPDATE public.mesas SET estado = $1 WHERE id = $2', ['ocupada', mesa_id]);
             }
         }
         
-        // 1. Crear cuenta
-        const nuevaCuenta = await db.query(
-            `INSERT INTO public.cuentas (cliente, total, tipo_cuenta, mesa_id, fecha_creado) 
-            VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+        // ✅ INSERT ESPECÍFICO - total_pendiente = total
+        const nuevaCuenta = await client.query(
+            `INSERT INTO public.cuentas 
+             (cliente, total, tipo_cuenta, mesa_id, fecha_creado, 
+              total_pagado, total_pendiente, total_vuelto, estado) 
+             VALUES ($1, $2, $3, $4, $5, 0, $2, 0, 'pendiente') 
+             RETURNING id, cliente, total, total_pagado, total_pendiente, total_vuelto, estado`,
             [cliente, total, tipo_cuenta, mesa_id || null, fechaActual]
         );
         
         const cuentaId = nuevaCuenta.rows[0].id;
         
-        // 2. ✅ INSERT DETALLES CON PROMOCIONES
+        // Insert detalles...
         for (const detalle of detalles) {
-            await db.query(
+            await client.query(
                 `INSERT INTO public.cuentas_detalle 
-                (cuenta_id, producto_id, cantidad_vendida, precio_compra_actual, precio_venta, promocion_id, fecha_creado)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-                [
-                    cuentaId, 
-                    detalle.producto_id, 
-                    detalle.cantidad_vendida, 
-                    detalle.precio_compra_actual, 
-                    detalle.precio_venta,  // 🎯 precio final (con/sin promo)
-                    detalle.promocion_id || null,  // ✅ NUEVO CAMPO
-                    fechaActual
-                ]
+                 (cuenta_id, producto_id, cantidad_vendida, precio_compra_actual, precio_venta, promocion_id, fecha_creado)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                [cuentaId, detalle.producto_id, detalle.cantidad_vendida, 
+                 detalle.precio_compra_actual, detalle.precio_venta,
+                 detalle.promocion_id || null, fechaActual]
             );
         }
         
-        res.status(201).json({ success: true, data: { id: cuentaId } });
+        await client.query("COMMIT");
+
+        // ✅ RETORNAR datos de BD (ya correctos)
+        res.status(201).json({ 
+            success: true, 
+            data: {
+                id: parseInt(nuevaCuenta.rows[0].id),
+                cliente: nuevaCuenta.rows[0].cliente,
+                total: parseFloat(nuevaCuenta.rows[0].total),
+                total_pagado: parseFloat(nuevaCuenta.rows[0].total_pagado),
+                total_pendiente: parseFloat(nuevaCuenta.rows[0].total_pendiente),  // ✅ = total
+                total_vuelto: parseFloat(nuevaCuenta.rows[0].total_vuelto),
+                estado: nuevaCuenta.rows[0].estado  // ✅ 'pendiente'
+            } 
+        });
         
     } catch (error) {
+        await client.query("ROLLBACK");
         console.error('❌ Error POST cuenta:', error.message);
         res.status(500).json({ success: false, error: error.message });
+    } finally {
+        client.release();
     }
 });
 
@@ -412,5 +482,46 @@ router.patch('/:id', async (req, res) => {
         res.status(500).json({ success: false, error: error.message });
     }
 });
+
+// ✅ SIN fecha_modificacion - SOLO tipo_pago
+router.patch('/:id/tipo-pago', async (req, res) => {
+    const { id } = req.params;
+    const { tipo_pago } = req.body;
+
+    try {
+        if (!['contado', 'credito'].includes(tipo_pago)) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'tipo_pago debe ser "contado" o "credito"' 
+            });
+        }
+
+        // ✅ SOLO tipo_pago = $1 (sin fecha_modificacion)
+        const result = await db.query(`
+            UPDATE public.cuentas 
+            SET tipo_pago = $1
+            WHERE id = $2 AND estado = 'pendiente'
+            RETURNING id, tipo_pago, estado
+        `, [tipo_pago, id]);
+
+        if (result.rows.length === 0) {
+            return res.status(400).json({ 
+                success: false, 
+                error: `Cuenta ${id} no encontrada o ya pagada` 
+            });
+        }
+
+        res.json({ 
+            success: true, 
+            message: `Cuenta #${id} cambiada a ${tipo_pago.toUpperCase()}`,
+            data: result.rows[0]
+        });
+
+    } catch (error) {
+        console.error('❌ Error cambiar tipo pago:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 
 module.exports = router;

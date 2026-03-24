@@ -12,6 +12,9 @@ const promocionesRouter = require('./routes/promociones')
 const usuariosRouter = require('./routes/usuarios')
 const gastosOperativosRouter = require('./routes/gastosOperativos')
 const categoriasRouter = require('./routes/categorias')
+const abonosCuentaRouter = require('./routes/abonos-cuenta')
+const tipoPagoRouter = require('./routes/tipo_pago')
+const formaPagoRouter = require('./routes/forma_pago')
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -30,7 +33,9 @@ app.use('/api/promociones', promocionesRouter);
 app.use('/api/usuarios', usuariosRouter);
 app.use('/api/gastos-operativos', gastosOperativosRouter);
 app.use('/api/categorias', categoriasRouter);
-
+app.use('/api/abonos-cuenta', abonosCuentaRouter);
+app.use('/api/tipo_pago', tipoPagoRouter);
+app.use('/api/forma_pago', formaPagoRouter);
 app.get('/', (req, res) => res.json({ message: 'Cervecería API v1.0.0' }));
 
 // Manejo de errores
