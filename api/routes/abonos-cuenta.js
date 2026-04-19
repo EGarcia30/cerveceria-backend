@@ -10,6 +10,13 @@ router.post("/", async (req, res) => {
     return res.status(400).json({ success: false, error: "Faltan campos requeridos" });
   }
 
+  const fechaActual = new Date().toLocaleDateString('sv-SV', { 
+            timeZone: 'America/El_Salvador',
+            year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+        }).split('/').reverse().join('-');
+
   const client = await db.pool.connect();
   try {
     await client.query("BEGIN");
@@ -48,11 +55,12 @@ router.post("/", async (req, res) => {
           total_abonado,
           forma_pago_id,
           referencia,
-          nota
+          nota,
+          fecha_pago
        )
-       VALUES ($1, $2, $3, $4, $5)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING id, cuenta_id, total_abonado`,
-      [cuenta_id, total_abonado, forma_pago_id, referencia, nota]
+      [cuenta_id, total_abonado, forma_pago_id, referencia, nota, fechaActual]
     );
 
     // ✅ 4. Actualizar tabla cuentas (como ya tenías)
