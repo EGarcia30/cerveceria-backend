@@ -7,6 +7,25 @@ const db = require('../config/database');
 // RUTAS: GASTOS OPERATIVOS
 // ============================================
 
+// ✅ FUNCIÓN AUXILIAR: Actualizar stock de productos
+// multiplicador: -1 = restar (aprobar), +1 = sumar (rechazar/cancelar)
+async function actualizarStockGasto(gastoId, multiplicador) {
+    const detalles = await db.query(
+        'SELECT producto_id, cantidad_consumida FROM public.detalles_gastos WHERE gasto_id = $1',
+        [gastoId]
+    );
+
+    for (const detalle of detalles.rows) {
+        // ✅ CAST explícito para evitar error "operator not unique: unknown * unknown"
+        await db.query(
+            `UPDATE public.productos
+             SET cantidad_disponible = cantidad_disponible + ($1::integer * $2::numeric)
+             WHERE id = $3`,
+            [multiplicador, detalle.cantidad_consumida, detalle.producto_id]
+        );
+    }
+}
+
 // GET /api/gastos-operativos - Lista paginada
 router.get('/', async (req, res) => {
     try {
@@ -111,13 +130,34 @@ router.get('/all', async (req, res) => {
 router.post('/', async (req, res) => {
     try {
         const { descripcion, tipo_gasto, mesa_id, usuario_id, total, detalles } = req.body;
-        
+
         // ✅ VALIDACIONES
         if (!descripcion || !usuario_id || !total || !detalles || detalles.length === 0) {
             return res.status(400).json({
                 success: false,
                 message: 'Faltan campos obligatorios: descripcion, usuario_id, total, detalles'
             });
+        }
+
+        // ✅ VALIDAR STOCK SUFICIENTE ANTES DE CREAR
+        for (const detalle of detalles) {
+            const stockResult = await db.query(
+                'SELECT cantidad_disponible, descripcion FROM public.productos WHERE id = $1',
+                [detalle.producto_id]
+            );
+            const producto = stockResult.rows[0];
+            if (!producto) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Producto ID ${detalle.producto_id} no encontrado`
+                });
+            }
+            if (parseFloat(producto.cantidad_disponible) < parseFloat(detalle.cantidad_consumida)) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Stock insuficiente para "${producto.descripcion}": disponible ${producto.cantidad_disponible}, solicitado ${detalle.cantidad_consumida}`
+                });
+            }
         }
 
         // ✅ HORA EL SALVADOR (CST UTC-6)
@@ -208,14 +248,68 @@ router.put('/:id', async (req, res) => {
             });
         }
 
+        // ✅ OBTENER ESTADO ACTUAL DEL GASTO
+        const gastoActual = await db.query(
+            'SELECT estado FROM public.gastos_operativos WHERE id = $1',
+            [id]
+        );
+
+        if (gastoActual.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Gasto no encontrado'
+            });
+        }
+
+        const estaAprobado = gastoActual.rows[0].estado === 'aprobado';
+
+        // ✅ SI ESTÁ APROBADO: VALIDAR STOCK ANTES DE EDITAR
+        if (estaAprobado) {
+            // Obtener detalles actuales para calcular diferencia
+            const detallesActuales = await db.query(
+                'SELECT producto_id, cantidad_consumida FROM public.detalles_gastos WHERE gasto_id = $1',
+                [id]
+            );
+
+            // Crear mapa de cantidades actuales vs nuevas
+            const stockChecks = [];
+            for (const nuevoDetalle of detalles) {
+                const detalleActual = detallesActuales.rows.find(d => d.producto_id === nuevoDetalle.producto_id);
+                const cantidadActual = detalleActual ? parseFloat(detalleActual.cantidad_consumida) : 0;
+                const cantidadNueva = parseFloat(nuevoDetalle.cantidad_consumida);
+                const diferencia = cantidadNueva - cantidadActual;
+
+                if (diferencia > 0) {
+                    // Se necesita más stock
+                    const stockResult = await db.query(
+                        'SELECT cantidad_disponible, descripcion FROM public.productos WHERE id = $1',
+                        [nuevoDetalle.producto_id]
+                    );
+                    const producto = stockResult.rows[0];
+                    if (!producto) {
+                        return res.status(400).json({
+                            success: false,
+                            message: `Producto ID ${nuevoDetalle.producto_id} no encontrado`
+                        });
+                    }
+                    if (parseFloat(producto.cantidad_disponible) < diferencia) {
+                        return res.status(400).json({
+                            success: false,
+                            message: `Stock insuficiente para "${producto.descripcion}": disponible ${producto.cantidad_disponible}, adicional necesario ${diferencia}`
+                        });
+                    }
+                }
+            }
+        }
+
         // Iniciar transacción
         await db.query('BEGIN');
 
         // 1. Actualizar gasto principal
         const updateGastoQuery = `
-            UPDATE public.gastos_operativos 
-            SET descripcion = $1, 
-                tipo_gasto = $2, 
+            UPDATE public.gastos_operativos
+            SET descripcion = $1,
+                tipo_gasto = $2,
                 total = $3,
                 fecha_modificado = CURRENT_TIMESTAMP
             WHERE id = $4
@@ -232,10 +326,53 @@ router.put('/:id', async (req, res) => {
             });
         }
 
-        // 2. Eliminar detalles anteriores
+        // ✅ 2. SI ESTÁ APROBADO: CALCULAR DIFERENCIA DE STOCK
+        if (estaAprobado) {
+            const detallesActuales = await db.query(
+                'SELECT producto_id, cantidad_consumida FROM public.detalles_gastos WHERE gasto_id = $1',
+                [id]
+            );
+
+            // Mapa de productos nuevos
+            const nuevosProductosMap = new Map();
+            detalles.forEach(d => nuevosProductosMap.set(d.producto_id, parseFloat(d.cantidad_consumida)));
+
+            // Calcular diferencia por producto
+            for (const detalleActual of detallesActuales.rows) {
+                const cantidadNueva = nuevosProductosMap.get(detalleActual.producto_id) || 0;
+                const diferencia = parseFloat(detalleActual.cantidad_consumida) - cantidadNueva;
+
+                if (diferencia !== 0) {
+                    // diferencia > 0: se reduce cantidad → DEVOLVER stock
+                    // diferencia < 0: se aumenta cantidad → RESTAR stock
+                    await db.query(
+                        `UPDATE public.productos
+                         SET cantidad_disponible = cantidad_disponible + $1
+                         WHERE id = $2`,
+                        [diferencia, detalleActual.producto_id]
+                    );
+                }
+            }
+
+            // Productos nuevos que no estaban antes
+            const productosActualesIds = new Set(detallesActuales.rows.map(d => d.producto_id));
+            for (const detalle of detalles) {
+                if (!productosActualesIds.has(detalle.producto_id)) {
+                    // Producto nuevo: RESTAR stock
+                    await db.query(
+                        `UPDATE public.productos
+                         SET cantidad_disponible = cantidad_disponible - $1
+                         WHERE id = $2`,
+                        [parseFloat(detalle.cantidad_consumida), detalle.producto_id]
+                    );
+                }
+            }
+        }
+
+        // 3. Eliminar detalles anteriores
         await db.query('DELETE FROM public.detalles_gastos WHERE gasto_id = $1', [id]);
 
-        // 3. Insertar nuevos detalles
+        // 4. Insertar nuevos detalles
         const insertDetallesQuery = `
             INSERT INTO public.detalles_gastos (gasto_id, producto_id, cantidad_consumida, precio_unitario, valor_total)
             VALUES ($1, $2, $3, $4, $5)
@@ -256,7 +393,7 @@ router.put('/:id', async (req, res) => {
 
         // Obtener gasto actualizado
         const gastoFinalQuery = `
-            SELECT go.*, u.nombre as nombre_usuario 
+            SELECT go.*, u.nombre as nombre_usuario
             FROM public.gastos_operativos go
             LEFT JOIN public.usuarios u ON go.usuario_id = u.id
             WHERE go.id = $1
@@ -295,6 +432,21 @@ router.patch('/:id/estado', async (req, res) => {
             });
         }
 
+        // ✅ OBTENER ESTADO ACTUAL DEL GASTO
+        const gastoActual = await db.query(
+            'SELECT estado FROM public.gastos_operativos WHERE id = $1',
+            [id]
+        );
+
+        if (gastoActual.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Gasto operativo no encontrado'
+            });
+        }
+
+        const estadoAnterior = gastoActual.rows[0].estado;
+
         // ✅ HORA EL SALVADOR
         const fechaLocal = new Date().toLocaleString('sv-SV', {
             timeZone: 'America/El_Salvador',
@@ -307,7 +459,7 @@ router.patch('/:id/estado', async (req, res) => {
         }).split('/').reverse().join('-');
 
         const updateQuery = `
-        UPDATE public.gastos_operativos 
+        UPDATE public.gastos_operativos
         SET estado = $1, fecha_modificado = $2
         WHERE id = $3
         RETURNING id, descripcion, total::numeric, estado, fecha_creado, fecha_modificado
@@ -315,12 +467,15 @@ router.patch('/:id/estado', async (req, res) => {
 
         const result = await db.query(updateQuery, [estado, fechaLocal, id]);
 
-        if (result.rows.length === 0) {
-            return res.status(404).json({
-                success: false,
-                message: 'Gasto operativo no encontrado'
-            });
+        // ✅ LÓGICA DE STOCK SEGÚN TRANSICIÓN DE ESTADO
+        if (estado === 'aprobado' && estadoAnterior !== 'aprobado') {
+            // Aprobar: RESTAR stock
+            await actualizarStockGasto(id, -1);
+        } else if (estado === 'rechazado' && estadoAnterior === 'aprobado') {
+            // Rechazar gasto previamente aprobado: DEVOLVER stock
+            await actualizarStockGasto(id, +1);
         }
+        // Si estaba rechazado y se rechaza de nuevo: no hacer nada
 
         res.json({
             success: true,
@@ -329,10 +484,11 @@ router.patch('/:id/estado', async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Error al actualizar estado:', error);
+        console.error('❌ Error al actualizar estado:', error);
+        console.error('Stack trace:', error.stack);
         res.status(500).json({
             success: false,
-            message: 'Error en el servidor',
+            message: 'Error en el servidor: ' + error.message,
             error: error.message
         });
     }
@@ -386,6 +542,51 @@ router.get('/:id', async (req, res) => {
 
     } catch (error) {
         console.error('Error al obtener detalle:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error en el servidor',
+            error: error.message
+        });
+    }
+});
+
+// ✅ DELETE /api/gastos-operativos/:id - Eliminar gasto (con lógica de stock)
+router.delete('/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        // 1. Verificar estado del gasto
+        const gastoActual = await db.query(
+            'SELECT estado FROM public.gastos_operativos WHERE id = $1',
+            [id]
+        );
+
+        if (gastoActual.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Gasto operativo no encontrado'
+            });
+        }
+
+        // 2. SI ESTÁ APROBADO: DEVOLVER STOCK ANTES DE ELIMINAR
+        if (gastoActual.rows[0].estado === 'aprobado') {
+            await actualizarStockGasto(id, +1);
+        }
+
+        // 3. Eliminar detalles (cascade) y gasto principal
+        await db.query('BEGIN');
+        await db.query('DELETE FROM public.detalles_gastos WHERE gasto_id = $1', [id]);
+        await db.query('DELETE FROM public.gastos_operativos WHERE id = $1', [id]);
+        await db.query('COMMIT');
+
+        res.json({
+            success: true,
+            message: 'Gasto operativo eliminado correctamente'
+        });
+
+    } catch (error) {
+        await db.query('ROLLBACK');
+        console.error('Error al eliminar gasto:', error);
         res.status(500).json({
             success: false,
             message: 'Error en el servidor',
